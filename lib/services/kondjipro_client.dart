@@ -363,6 +363,22 @@ class KondjiproClient {
   /// Profil du médecin connecté (famille médicale — réelle).
   Future<Map<String, dynamic>> medecinProfil() => get(ApiConfig.medecin);
 
+  /// Liste des factures (`GET /api/factures.php`).
+  Future<List<Map<String, dynamic>>> factures() async {
+    final res = await get(ApiConfig.factures);
+    final list = res['factures'];
+    if (list is! List) return [];
+    return list.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Liste des ordonnances (`GET /api/ordonnances.php`).
+  Future<List<Map<String, dynamic>>> ordonnances() async {
+    final res = await get(ApiConfig.ordonnances);
+    final list = res['ordonnances'];
+    if (list is! List) return [];
+    return list.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
   /// Solde KondjiPay — route ARGENT (démo si [ApiConfig.moneyDemo]).
   /// Réponse {ok, solde} dans les deux modes.
   Future<int> solde() async {

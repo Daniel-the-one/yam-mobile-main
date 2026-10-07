@@ -142,6 +142,12 @@ class ApiConfig {
   /// POST patient, actes[]=code (catalogue C001…C006).
   static const String factureSave = '$_kproPrefix/facture_save.php';
 
+  /// GET → liste des factures (les plus récentes d'abord).
+  static const String factures = '$_kproPrefix/factures.php';
+
+  /// GET → liste des ordonnances (les plus récentes d'abord).
+  static const String ordonnances = '$_kproPrefix/ordonnances.php';
+
   /// GET → profil du médecin connecté + solde ; POST → mise à jour profil.
   static const String medecin = '$_kproPrefix/medecin.php';
 

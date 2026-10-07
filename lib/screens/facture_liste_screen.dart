@@ -23,66 +23,136 @@ class _Facture {
   bool get estPayee => statut == _StatutFacture.payee;
 }
 
-/// Liste des factures. Point d'entrée vers la création d'une facture.
-class FactureListeScreen extends StatelessWidget {
+/// Liste des factures (chargée depuis l'API médicale).
+/// Point d'entrée vers la création d'une facture.
+class FactureListeScreen extends StatefulWidget {
   const FactureListeScreen({super.key, this.app});
 
   /// Contexte applicatif transmis à l'écran de création (API médicale).
   final AppState? app;
 
-  static const _factures = <_Facture>[
-    _Facture(
-      numero: 'FAC-2026-089',
-      patient: 'Jean KOFFI',
-      montant: 15000,
-      date: '18/09/2026',
-      statut: _StatutFacture.payee,
-    ),
-    _Facture(
-      numero: 'FAC-2026-088',
-      patient: 'Amina ABALO',
-      montant: 7500,
-      date: '17/09/2026',
-      statut: _StatutFacture.payee,
-    ),
-    _Facture(
-      numero: 'FAC-2026-087',
-      patient: 'Kofi AGBEKO',
-      montant: 22500,
-      date: '16/09/2026',
-      statut: _StatutFacture.enAttente,
-    ),
-    _Facture(
-      numero: 'FAC-2026-086',
-      patient: 'Essi MENSAH',
-      montant: 5000,
-      date: '15/09/2026',
-      statut: _StatutFacture.payee,
-    ),
-    _Facture(
-      numero: 'FAC-2026-085',
-      patient: 'Jean KOFFI',
-      montant: 10000,
-      date: '12/09/2026',
-      statut: _StatutFacture.enAttente,
-    ),
-    _Facture(
-      numero: 'FAC-2026-084',
-      patient: 'Amina ABALO',
-      montant: 32500,
-      date: '10/09/2026',
-      statut: _StatutFacture.payee,
-    ),
-  ];
+  @override
+  State<FactureListeScreen> createState() => _FactureListeScreenState();
+}
 
-  String _formatMontant(int value) {
-    final str = value.toString();
-    final buffer = StringBuffer();
-    for (var i = 0; i < str.length; i++) {
-      if (i > 0 && (str.length - i) % 3 == 0) buffer.write(' ');
-      buffer.write(str[i]);
+class _FactureListeScreenState extends State<FactureListeScreen> {
+  List<_Facture> _factures = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  /// Charge la liste depuis l'API médicale (`GET /api/factures.php`).
+  Future<void> _load() async {
+    final app = widget.app;
+    if (app == null) {
+      setState(() => _loading = false);
+      return;
     }
-    return '${buffer.toString()} FCFA';
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await app.kpro.factures();
+      final list = rows
+          .map((r) => _Facture(
+                numero: r['numero']?.toString() ?? '—',
+                patient: r['patient']?.toString() ?? 'Patient inconnu',
+                montant: int.tryParse('${r['montant']}') ?? 0,
+                date: r['date']?.toString() ?? '',
+                statut: r['statut'] == 'payee'
+                    ? _StatutFacture.payee
+                    : _StatutFacture.enAttente,
+              ))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _factures = list;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = '$e';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openCreate() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => FacturerScreen(app: widget.app)),
+    );
+    // Une facture vient peut-être d'être créée : on rafraîchit la liste.
+    _load();
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  size: 40, color: YamColors.muted),
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: YamColors.muted),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Réessayer'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_factures.isEmpty) {
+      return const Center(
+        child: Text(
+          'Aucune facture enregistrée',
+          style: TextStyle(color: YamColors.muted),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      itemCount: _factures.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final facture = _factures[index];
+        return _FactureCard(
+          facture: facture,
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Détail facture à venir (${facture.numero})'),
+                backgroundColor: YamColors.primary,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -101,6 +171,13 @@ class FactureListeScreen extends StatelessWidget {
             fontSize: 18,
           ),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Rafraîchir',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh_rounded, color: YamColors.text),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(color: YamColors.border, height: 1),
@@ -109,40 +186,14 @@ class FactureListeScreen extends StatelessWidget {
       body: SafeArea(
         child: Column(
           children: [
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                itemCount: _factures.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final facture = _factures[index];
-                  return _FactureCard(
-                    facture: facture,
-                    montant: _formatMontant(facture.montant),
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content:
-                              Text('Détail facture à venir (${facture.numero})'),
-                          backgroundColor: YamColors.primary,
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
+            Expanded(child: _buildBody()),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => FacturerScreen(app: app)),
-                  ),
+                  onPressed: _openCreate,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,
                     foregroundColor: Colors.white,
@@ -169,13 +220,21 @@ class FactureListeScreen extends StatelessWidget {
 class _FactureCard extends StatelessWidget {
   const _FactureCard({
     required this.facture,
-    required this.montant,
     required this.onTap,
   });
 
   final _Facture facture;
-  final String montant;
   final VoidCallback onTap;
+
+  String _formatMontant(int value) {
+    final str = value.toString();
+    final buffer = StringBuffer();
+    for (var i = 0; i < str.length; i++) {
+      if (i > 0 && (str.length - i) % 3 == 0) buffer.write(' ');
+      buffer.write(str[i]);
+    }
+    return '${buffer.toString()} FCFA';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -227,7 +286,7 @@ class _FactureCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          montant,
+                          _formatMontant(facture.montant),
                           style: const TextStyle(
                             color: YamColors.text,
                             fontWeight: FontWeight.w700,

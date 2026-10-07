@@ -389,4 +389,60 @@ void main() {
       );
     });
   });
+
+  group('KondjiproClient — listes factures / ordonnances', () {
+    test('factures() retourne la liste parsée', () async {
+      final client = _clientWith((req) async {
+        if (req.url.path.contains('login')) return _loginOk();
+        expect(req.url.toString(), 'http://kpro.test/api/factures.php');
+        return http.Response(
+          jsonEncode({
+            'ok': true,
+            'factures': [
+              {'id': 1, 'numero': 'FAC-2026-001', 'patient': 'Jean KOFFI', 'montant': 5000, 'date': '16/09/2026', 'statut': 'payee'},
+            ],
+          }),
+          200,
+        );
+      });
+      await client.login(identifier: 'i', password: 'p');
+
+      final rows = await client.factures();
+      expect(rows, hasLength(1));
+      expect(rows.first['numero'], 'FAC-2026-001');
+      expect(rows.first['statut'], 'payee');
+    });
+
+    test('ordonnances() retourne la liste parsée', () async {
+      final client = _clientWith((req) async {
+        if (req.url.path.contains('login')) return _loginOk();
+        expect(req.url.toString(), 'http://kpro.test/api/ordonnances.php');
+        return http.Response(
+          jsonEncode({
+            'ok': true,
+            'ordonnances': [
+              {'id': 1, 'numero': 'ORD-2026-001', 'patient': 'Jean KOFFI', 'date': '16/09/2026', 'notes': '', 'medicaments': [{'nom': 'Paracétamol 500mg', 'quantite': 21}]},
+            ],
+          }),
+          200,
+        );
+      });
+      await client.login(identifier: 'i', password: 'p');
+
+      final rows = await client.ordonnances();
+      expect(rows, hasLength(1));
+      expect(rows.first['numero'], 'ORD-2026-001');
+      expect((rows.first['medicaments'] as List).first['nom'], 'Paracétamol 500mg');
+    });
+
+    test('factures() renvoie une liste vide si la clé est absente', () async {
+      final client = _clientWith((req) async {
+        if (req.url.path.contains('login')) return _loginOk();
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+      await client.login(identifier: 'i', password: 'p');
+
+      expect(await client.factures(), isEmpty);
+    });
+  });
 }

@@ -19,50 +19,145 @@ class _Ordonnance {
   final String praticien;
 }
 
-/// Liste des ordonnances. Point d'entrée vers la création d'une ordonnance.
-class OrdonnanceListeScreen extends StatelessWidget {
+/// Liste des ordonnances (chargée depuis l'API médicale).
+/// Point d'entrée vers la création d'une ordonnance.
+class OrdonnanceListeScreen extends StatefulWidget {
   const OrdonnanceListeScreen({super.key, this.app});
 
   /// Contexte applicatif transmis à l'écran de création (API médicale).
   final AppState? app;
 
-  static const _ordonnances = <_Ordonnance>[
-    _Ordonnance(
-      numero: 'ORD-2026-112',
-      patient: 'Amina ABALO',
-      date: '18/09/2026',
-      medicaments: 'Paracétamol 500 mg, Ibuprofène 400 mg',
-      praticien: 'Dr KOFFI',
-    ),
-    _Ordonnance(
-      numero: 'ORD-2026-111',
-      patient: 'Jean KOFFI',
-      date: '17/09/2026',
-      medicaments: 'Amoxicilline 500 mg',
-      praticien: 'Dr KOFFI',
-    ),
-    _Ordonnance(
-      numero: 'ORD-2026-110',
-      patient: 'Essi MENSAH',
-      date: '15/09/2026',
-      medicaments: 'Metformine 850 mg, Sertraline 50 mg',
-      praticien: 'Dr AGBEKO',
-    ),
-    _Ordonnance(
-      numero: 'ORD-2026-109',
-      patient: 'Kofi AGBEKO',
-      date: '12/09/2026',
-      medicaments: 'Amlodipine 5 mg, Hydrochlorothiazide 25 mg',
-      praticien: 'Dr AGBEKO',
-    ),
-    _Ordonnance(
-      numero: 'ORD-2026-108',
-      patient: 'Amina ABALO',
-      date: '10/09/2026',
-      medicaments: 'Oméprazole 20 mg, Vitamine D',
-      praticien: 'Dr MENSAH',
-    ),
-  ];
+  @override
+  State<OrdonnanceListeScreen> createState() => _OrdonnanceListeScreenState();
+}
+
+class _OrdonnanceListeScreenState extends State<OrdonnanceListeScreen> {
+  List<_Ordonnance> _ordonnances = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  /// Charge la liste depuis l'API médicale (`GET /api/ordonnances.php`).
+  Future<void> _load() async {
+    final app = widget.app;
+    if (app == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await app.kpro.ordonnances();
+      final list = rows.map((r) {
+        final meds = r['medicaments'];
+        final noms = meds is List
+            ? meds
+                .whereType<Map>()
+                .map((m) => m['nom']?.toString() ?? '')
+                .where((n) => n.isNotEmpty)
+                .join(', ')
+            : '';
+        return _Ordonnance(
+          numero: r['numero']?.toString() ?? '—',
+          patient: r['patient']?.toString() ?? 'Patient inconnu',
+          date: r['date']?.toString() ?? '',
+          medicaments: noms.isNotEmpty ? noms : (r['notes']?.toString() ?? ''),
+          praticien: '',
+        );
+      }).toList();
+      if (mounted) {
+        setState(() {
+          _ordonnances = list;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = '$e';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openCreate() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => OrdonnanceScreen(app: widget.app)),
+    );
+    // Une ordonnance vient peut-être d'être créée : on rafraîchit la liste.
+    _load();
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  size: 40, color: YamColors.muted),
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: YamColors.muted),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Réessayer'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_ordonnances.isEmpty) {
+      return const Center(
+        child: Text(
+          'Aucune ordonnance enregistrée',
+          style: TextStyle(color: YamColors.muted),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      itemCount: _ordonnances.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final ordonnance = _ordonnances[index];
+        return _OrdonnanceCard(
+          ordonnance: ordonnance,
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Détail ordonnance à venir (${ordonnance.numero})',
+                ),
+                backgroundColor: YamColors.primary,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,6 +175,13 @@ class OrdonnanceListeScreen extends StatelessWidget {
             fontSize: 18,
           ),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Rafraîchir',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh_rounded, color: YamColors.text),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(color: YamColors.border, height: 1),
@@ -88,40 +190,14 @@ class OrdonnanceListeScreen extends StatelessWidget {
       body: SafeArea(
         child: Column(
           children: [
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                itemCount: _ordonnances.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final ordonnance = _ordonnances[index];
-                  return _OrdonnanceCard(
-                    ordonnance: ordonnance,
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Détail ordonnance à venir (${ordonnance.numero})',
-                          ),
-                          backgroundColor: YamColors.primary,
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
+            Expanded(child: _buildBody()),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => OrdonnanceScreen(app: app)),
-                  ),
+                  onPressed: _openCreate,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,
                     foregroundColor: Colors.white,
@@ -146,7 +222,10 @@ class OrdonnanceListeScreen extends StatelessWidget {
 }
 
 class _OrdonnanceCard extends StatelessWidget {
-  const _OrdonnanceCard({required this.ordonnance, required this.onTap});
+  const _OrdonnanceCard({
+    required this.ordonnance,
+    required this.onTap,
+  });
 
   final _Ordonnance ordonnance;
   final VoidCallback onTap;
@@ -196,10 +275,13 @@ class _OrdonnanceCard extends StatelessWidget {
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Row(
                           children: [
-                            Text(ordonnance.numero, style: mono(size: 11)),
+                            Text(
+                              ordonnance.numero,
+                              style: mono(size: 11),
+                            ),
                             const SizedBox(width: 8),
                             Text(
                               ordonnance.date,
@@ -231,15 +313,17 @@ class _OrdonnanceCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 8),
-              Text(
-                ordonnance.praticien,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: YamColors.muted,
-                  fontWeight: FontWeight.w500,
+              if (ordonnance.praticien.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  ordonnance.praticien,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: YamColors.muted,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
