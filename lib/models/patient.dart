@@ -4,6 +4,7 @@ class Patient {
     required this.telephone,
     required this.dateNaissance,
     this.id = '',
+    this.uuid = '',
     this.groupeSanguin = 'O+',
     this.sexe = 'Masculin',
     this.adresse = 'Lomé, Quartier Tokoin',
@@ -22,12 +23,56 @@ class Patient {
   /// Identifiant lu dans la carte QR (ex: `PAT-2024-00123`).
   final String id;
 
+  /// Identifiant UUID du dossier KondjiPro (contenu du QR patient).
+  final String uuid;
+
   final String groupeSanguin;
   final String sexe;
   final String adresse;
   final String contactUrgence;
   final List<String> allergies;
   final List<String> antecedents;
+
+  /// Construit un patient depuis une ligne brute de `GET /api/patients.php`.
+  ///
+  /// Le serveur renvoie `date_naissance` au format `YYYY-MM-DD` (ou vide) ;
+  /// le modèle travaille en `dd/MM/yyyy`. Champs absents → valeurs par
+  /// défaut du modèle (l'API médicale est partielle).
+  factory Patient.fromApi(Map<String, dynamic> json) {
+    final naissance = (json['date_naissance'] ?? '').toString();
+    var dateNaissance = naissance;
+    final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(naissance);
+    if (iso != null) {
+      dateNaissance = '${iso.group(3)}/${iso.group(2)}/${iso.group(1)}';
+    }
+
+    final sexe = (json['sexe'] ?? '').toString();
+    final allergies = json['allergies'];
+
+    return Patient(
+      id: (json['id'] ?? '').toString(),
+      uuid: (json['uuid'] ?? '').toString(),
+      nom: (json['nom'] ?? '').toString(),
+      telephone: (json['telephone'] ?? '').toString(),
+      dateNaissance: dateNaissance,
+      sexe: sexe == 'F' ? 'Féminin' : sexe == 'M' ? 'Masculin' : 'Masculin',
+      adresse: (json['adresse'] ?? '').toString().isNotEmpty
+          ? json['adresse'].toString()
+          : 'Adresse non renseignée',
+      groupeSanguin:
+          (json['groupe_sanguin'] ?? '').toString().isNotEmpty
+              ? json['groupe_sanguin'].toString()
+              : '—',
+      allergies: allergies is String && allergies.isNotEmpty
+          ? allergies
+              .split(RegExp(r'[,;]'))
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList()
+          : const [],
+      antecedents: const [],
+    );
+  }
 
   String get initials {
     final parts = nom.split(' ');

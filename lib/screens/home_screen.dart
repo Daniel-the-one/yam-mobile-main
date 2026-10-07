@@ -6,6 +6,7 @@ import 'dossier_medical_screen.dart';
 import 'encaisser_screen.dart';
 import 'facture_liste_screen.dart';
 import 'ordonnance_liste_screen.dart';
+import 'wallet_dialogs.dart';
 
 /// Accueil : solde + grille d'accès rapide.
 class HomeScreen extends StatefulWidget {
@@ -23,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const _WalletCard(),
+        _WalletCard(app: widget.app),
         const SizedBox(height: 20),
         const Text(
           'Services rapides',
@@ -41,7 +42,9 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _WalletCard extends StatefulWidget {
-  const _WalletCard();
+  const _WalletCard({required this.app});
+
+  final AppState app;
 
   @override
   State<_WalletCard> createState() => _WalletCardState();
@@ -49,33 +52,73 @@ class _WalletCard extends StatefulWidget {
 
 class _WalletCardState extends State<_WalletCard> {
   bool _isHidden = false;
-  final String _balance = "0 F";
+  String _balance = '—';
+  bool _loadingBalance = true;
 
-  void _showComingSoon(BuildContext context) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text('Bientôt disponible'),
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
-        ),
-      );
+  @override
+  void initState() {
+    super.initState();
+    _refreshBalance();
   }
 
-  void _onRecharge(BuildContext context) {
-    // Point d'accroche pour brancher l'API plus tard
-    _showComingSoon(context);
+  /// Charge le solde réel depuis l'API wallet (`GET /api/v1/wallet` ou
+  /// `/api/demo/v1/wallet` selon [ApiConfig.moneyDemo]).
+  Future<void> _refreshBalance() async {
+    try {
+      final res = await widget.app.fetchWallet();
+      final wallet = res?['wallet'];
+      final raw = wallet is Map ? wallet['solde_raw'] : null;
+      final amount = int.tryParse('$raw') ?? 0;
+      if (mounted) {
+        setState(() {
+          _balance = _formatAmount(amount);
+          _loadingBalance = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[YAM][WALLET] solde indisponible : $e');
+      if (mounted) {
+        setState(() {
+          _balance = '—';
+          _loadingBalance = false;
+        });
+      }
+    }
   }
 
-  void _onSend(BuildContext context) {
-    // Point d'accroche pour brancher l'API plus tard
-    _showComingSoon(context);
+  /// Formate un montant avec séparateur de milliers : `50000` → `50 000 F`.
+  static String _formatAmount(int amount) {
+    final digits = amount.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) buf.write(' ');
+      buf.write(digits[i]);
+    }
+    return '$buf F';
   }
 
-  void _onWithdraw(BuildContext context) {
-    // Point d'accroche pour brancher l'API plus tard
-    _showComingSoon(context);
+  Future<void> _onRecharge(BuildContext context) async {
+    await showDialog(
+      context: context,
+      builder: (_) => RechargeWalletDialog(app: widget.app),
+    );
+    _refreshBalance();
+  }
+
+  Future<void> _onSend(BuildContext context) async {
+    await showDialog(
+      context: context,
+      builder: (_) => SendMoneyDialog(app: widget.app),
+    );
+    _refreshBalance();
+  }
+
+  Future<void> _onWithdraw(BuildContext context) async {
+    await showDialog(
+      context: context,
+      builder: (_) => WithdrawMoneyDialog(app: widget.app),
+    );
+    _refreshBalance();
   }
 
   Widget _buildActionButton({
@@ -145,69 +188,90 @@ class _WalletCardState extends State<_WalletCard> {
               fontWeight: FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    _isHidden ? "•••••• F" : _balance,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  InkWell(
-                    onTap: () => setState(() => _isHidden = !_isHidden),
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        _isHidden ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                    ),
-                  ),
-                ],
+              Text(
+                _isHidden
+                    ? "•••••• F"
+                    : (_loadingBalance ? '…' : _balance),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                ),
               ),
-              Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildActionButton(
-                      context: context,
-                      icon: Icons.add_rounded,
-                      label: 'Recharger',
-                      onTap: () => _onRecharge(context),
-                    ),
-                    const SizedBox(width: 8),
-                    _buildActionButton(
-                      context: context,
-                      icon: Icons.send_rounded,
-                      label: 'Envoyer',
-                      onTap: () => _onSend(context),
-                    ),
-                    const SizedBox(width: 8),
-                    _buildActionButton(
-                      context: context,
-                      icon: Icons.account_balance_wallet_rounded,
-                      label: 'Retirer',
-                      onTap: () => _onWithdraw(context),
-                    ),
-                  ],
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: () => setState(() => _isHidden = !_isHidden),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _isHidden ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: _refreshBalance,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.refresh_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              Expanded(
+                child: Center(
+                  child: _buildActionButton(
+                    context: context,
+                    icon: Icons.add_rounded,
+                    label: 'Recharger',
+                    onTap: () => _onRecharge(context),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: _buildActionButton(
+                    context: context,
+                    icon: Icons.send_rounded,
+                    label: 'Envoyer',
+                    onTap: () => _onSend(context),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: _buildActionButton(
+                    context: context,
+                    icon: Icons.account_balance_wallet_rounded,
+                    label: 'Retirer',
+                    onTap: () => _onWithdraw(context),
+                  ),
                 ),
               ),
             ],
@@ -252,7 +316,7 @@ class _QuickAccessGrid extends StatelessWidget {
           iconBgColor: YamColors.primarySoft,
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const EncaisserScreen()),
+            MaterialPageRoute(builder: (_) => EncaisserScreen(app: app)),
           ),
         ),
         _GridCard(
@@ -263,7 +327,7 @@ class _QuickAccessGrid extends StatelessWidget {
           iconBgColor: YamColors.accentSoft,
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const FactureListeScreen()),
+            MaterialPageRoute(builder: (_) => FactureListeScreen(app: app)),
           ),
         ),
         _GridCard(
@@ -274,7 +338,7 @@ class _QuickAccessGrid extends StatelessWidget {
           iconBgColor: YamColors.primarySoft,
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const OrdonnanceListeScreen()),
+            MaterialPageRoute(builder: (_) => OrdonnanceListeScreen(app: app)),
           ),
         ),
       ],

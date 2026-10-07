@@ -66,7 +66,15 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
   int _activeTab = 0;
   String _historyFilter = 'Tous';
 
-  final List<_MedicalEvent> _events = const [
+  // Historique médical chargé depuis l'API KondjiPro
+  // (GET /api/patients.php?id=… → {patient, historique}).
+  List<_MedicalEvent> _events = const [];
+  bool _loading = true;
+  String? _error;
+
+  /// Jeu de secours affiché UNIQUEMENT quand aucun [AppState] n'est fourni
+  //  (widget isolé / test) — jamais présenté comme des données réelles.
+  static const List<_MedicalEvent> _mockEvents = [
     _MedicalEvent(
       date: '12 sept. 2026',
       type: _MedicalEventType.consultation,
@@ -113,6 +121,84 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       badge: 'Terminé',
     ),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  /// Charge l'historique du patient depuis l'API médicale (famille réelle).
+  ///
+  /// Les lignes renvoyées ont la forme
+  /// `{type, titre, desc, date}` ; elles sont converties en [_MedicalEvent].
+  /// Échec → bandeau d'erreur + réessayer (pas de fausses données).
+  Future<void> _loadHistory() async {
+    final app = widget.app;
+    if (app == null) {
+      setState(() {
+        _events = _mockEvents;
+        _loading = false;
+      });
+      return;
+    }
+    final patientId = widget.patient.id;
+    if (patientId.isEmpty) {
+      setState(() {
+        _events = [];
+        _loading = false;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final (patient, historique) = await app.kpro.patientDetail(patientId);
+      if (!mounted) return;
+      setState(() {
+        _events = historique.map(_eventFromApi).toList();
+        // Le détail confirme aussi les champs du patient (allergies…) —
+        // on n'en profite pas pour ne pas écraser l'objet affiché en cours.
+        if (patient == null) _error = 'Patient introuvable côté serveur.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  _MedicalEvent _eventFromApi(Map<String, dynamic> row) {
+    final typeStr = (row['type'] ?? '').toString();
+    final type = switch (typeStr) {
+      'ord' => _MedicalEventType.ordonnance,
+      'facture' => _MedicalEventType.facture,
+      'analyse' => _MedicalEventType.analyse,
+      _ => _MedicalEventType.consultation,
+    };
+    final badge = switch (type) {
+      _MedicalEventType.consultation => 'Terminé',
+      _MedicalEventType.ordonnance => 'Délivrée',
+      _MedicalEventType.facture => 'Facturée',
+      _MedicalEventType.analyse => 'Résultats',
+    };
+    final praticien =
+        (widget.app?.userName ?? '').trim().isNotEmpty
+            ? widget.app!.userName
+            : 'Médecin traitant';
+
+    return _MedicalEvent(
+      date: (row['date'] ?? '').toString(),
+      type: type,
+      titre: (row['titre'] ?? 'Événement médical').toString(),
+      praticien: praticien,
+      details: (row['desc'] ?? '').toString(),
+      badge: badge,
+    );
+  }
 
   List<_MedicalEvent> get _filteredEvents {
     if (_historyFilter == 'Tous') return _events;
@@ -477,7 +563,12 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                 bgColor: YamColors.primarySoft,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const OrdonnanceScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => OrdonnanceScreen(
+                      app: widget.app,
+                      patient: patient,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -489,7 +580,12 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                 bgColor: YamColors.accentSoft,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const FacturerScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => FacturerScreen(
+                      app: widget.app,
+                      patient: patient,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -673,6 +769,65 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
   //  Onglet 0 : Historique
   // ─────────────────────────────────────────────────────────
   Widget _buildHistoryTab() {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 36),
+        child: Center(
+          child: CircularProgressIndicator(color: YamColors.primary),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: YamColors.danger.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: YamColors.danger.withValues(alpha: 0.4)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.error_outline_rounded,
+                    color: YamColors.danger, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _error!,
+                    style:
+                        const TextStyle(fontSize: 12.5, color: YamColors.text),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _loadHistory,
+                child: const Text('Réessayer'),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_events.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 28),
+        child: Center(
+          child: Text(
+            'Aucun événement médical enregistré pour ce patient.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: YamColors.muted, fontSize: 13.5),
+          ),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

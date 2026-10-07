@@ -5,9 +5,11 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/contact.dart';
 import '../models/missed_call.dart';
+import '../config/api_config.dart';
 import '../services/api_client.dart';
 import '../services/battery_optimization_service.dart';
 import '../services/call_service.dart';
+import '../services/kondjipro_client.dart';
 import '../services/push_service.dart';
 import '../services/runtime_config.dart';
 import '../services/signaling_service.dart';
@@ -19,6 +21,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   late final ApiClient api = ApiClient(
     () => serverUrl,
     tokenProvider: () => authToken,
+    demoTokenProvider: () => demoToken,
+  );
+
+  /// Client des APIs médicales KondjiPro (cookie de session PHP + CSRF).
+  /// Les endpoints sont déclarés dans [ApiConfig] — famille médicale réelle,
+  /// famille argent en démo tant que `ApiConfig.moneyDemo` est vrai.
+  late final KondjiproClient kpro = KondjiproClient(
+    baseUrlProvider: () => serverUrl,
+    storage: storage,
+    demoTokenProvider: () => demoToken,
   );
   final signaling = SignalingService();
   late final CallService call = CallService(api);
@@ -31,6 +43,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   String userPhone = '';
   String userId = '';
   String authToken = '';
+  String demoToken = '';
   ConnStatus status = ConnStatus.disconnected;
   RuntimeConfig? runtimeConfig;
   List<Contact> contacts = [];
@@ -50,6 +63,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     userPhone = await storage.loadUserPhone();
     userId = await storage.loadUserId();
     authToken = await storage.loadAuthToken();
+    demoToken = await storage.loadDemoToken();
     if (userName.isEmpty) {
       final suffix = deviceId.length > 4 ? deviceId.substring(deviceId.length - 4) : deviceId;
       userName = 'Appareil $suffix';
@@ -58,6 +72,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     serverUrl = await storage.loadServerUrl();
     contacts = await storage.loadContacts();
     calls = await storage.loadCalls();
+    // Restaure la session médicale KondjiPro (cookie PHP) éventuellement
+    // conservée par une session précédente. Le re-login silencieux reste
+    // possible pendant l'usage courant (identifiants en mémoire).
+    await kpro.restore();
     call.myDeviceId = deviceId;
     call.myName = userName;
 
@@ -77,6 +95,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     call.addListener(notifyListeners);
 
     if (isAuthenticated) unawaited(_startAuthenticatedSession());
+    // Redémarrage de l'app : la session démo persistée peut avoir expiré ou
+    // manquer → on en (re)crée une (visiteur si les identifiants ne sont pas
+    // disponibles).
+    if (isAuthenticated && ApiConfig.moneyDemo && demoToken.isEmpty) {
+      unawaited(_ensureDemoSession());
+    }
 
     // Reconnexion automatique périodique si l'appareil est déconnecté
     // (ex: changement de Wi-Fi, bascule 4G, perte temporaire de signal).
@@ -164,6 +188,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       label: userName,
     );
     await _storeAuthenticatedSession(result, fallbackPhone: cleanPhone);
+    // Même identifiant/mot de passe que Yam (table users partagée) :
+    // ouvre aussi la session médicale KondjiPro (cookie + CSRF).
+    unawaited(_kproLogin(identifier: cleanPhone, password: password));
+    // Famille argent : ouvre la session de démonstration dédiée.
+    unawaited(_ensureDemoSession(
+        phone: cleanPhone, password: password, name: userName));
   }
 
   Future<void> register({
@@ -182,7 +212,94 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       platform: 'android',
       username: username?.trim(),
     );
-    await _storeAuthenticatedSession(result, fallbackName: cleanName, fallbackPhone: cleanPhone);
+    await _storeAuthenticatedSession(result,
+        fallbackName: cleanName, fallbackPhone: cleanPhone);
+    unawaited(_kproLogin(identifier: cleanPhone, password: password));
+    unawaited(_ensureDemoSession(
+        phone: cleanPhone, password: password, name: cleanName));
+  }
+
+  /// Ouvre la session médicale KondjiPro après le login Yam.
+  ///
+  /// Non bloquant : un échec (API médicale injoignable) n'empêche pas
+  /// l'appel ni la navigation — les écrans médicaux afficheront alors
+  /// leur message d'erreur au premier usage.
+  Future<void> _kproLogin({
+    required String identifier,
+    required String password,
+  }) async {
+    try {
+      await kpro.login(identifier: identifier, password: password);
+    } catch (e) {
+      debugPrint('[YAM][KPRO] session médicale non ouverte : $e');
+    }
+  }
+
+  /// Ouvre la session de DÉMONSTRATION (famille argent) si nécessaire.
+  ///
+  /// Les endpoints `/api/demo/v1/*` exigent leur propre jeton (`demo_…`),
+  /// distinct du jeton Yam : sans lui, recharge/transfert/retrait/encaissement
+  /// échoueraient en 401. Stratégie, dans l'ordre :
+  ///  1. `register` (nouveau compte démo lié au téléphone) ;
+  ///  2. `login` (compte démo déjà créé lors d'une session précédente) ;
+  ///  3. session visiteur (corps vide) — dernier recours si les identifiants
+  ///     ne sont pas disponibles (redémarrage de l'app).
+  /// Non bloquant : un échec n'empêche pas l'appel ni la navigation.
+  Future<void> _ensureDemoSession({
+    String? phone,
+    String? password,
+    String? name,
+  }) async {
+    if (!ApiConfig.moneyDemo) return;
+    if (demoToken.isNotEmpty) return;
+
+    final p = phone ?? userPhone;
+    final pwd = password ?? '';
+    final displayName = name ?? userName;
+
+    // 1. register (nouveau compte démo lié au téléphone).
+    try {
+      final res = await api.demoRegister(
+        name: displayName.isNotEmpty ? displayName : 'Utilisateur mobile',
+        phoneNumber: p.isNotEmpty
+            ? p
+            : 'mobile-${deviceId.substring(deviceId.length > 4 ? deviceId.length - 4 : 0)}',
+        password: pwd.isNotEmpty ? pwd : 'yam-demo-2026',
+        deviceId: deviceId,
+      );
+      demoToken = (res['data'] as Map?)?['token']?.toString() ?? '';
+    } catch (e) {
+      debugPrint('[YAM][DEMO] register démo refusé ($e)');
+    }
+
+    // 2. login (compte démo déjà créé lors d'une session précédente).
+    if (demoToken.isEmpty) {
+      try {
+        final res = await api.demoLogin(
+          phoneNumber: p.isNotEmpty ? p : null,
+          password: pwd.isNotEmpty ? pwd : null,
+          deviceId: deviceId,
+        );
+        demoToken = (res['data'] as Map?)?['token']?.toString() ?? '';
+      } catch (e) {
+        debugPrint('[YAM][DEMO] login démo refusé ($e)');
+      }
+    }
+
+    // 3. session visiteur (dernier recours — identifiants indisponibles).
+    if (demoToken.isEmpty) {
+      try {
+        final res = await api.demoLogin(deviceId: deviceId);
+        demoToken = (res['data'] as Map?)?['token']?.toString() ?? '';
+      } catch (e) {
+        debugPrint('[YAM][DEMO] session visiteur impossible : $e');
+      }
+    }
+
+    if (demoToken.isNotEmpty) {
+      await storage.saveDemoToken(demoToken);
+      debugPrint('[YAM][DEMO] session de démonstration établie');
+    }
   }
 
   Future<void> logout() async {
@@ -190,6 +307,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       await api.logout();
     } catch (_) {
       // Le nettoyage local reste nécessaire même si le serveur est injoignable.
+    }
+    try {
+      await kpro.logout();
+    } catch (_) {
+      // Idem pour la session médicale.
     }
     await signaling.disconnect();
     await storage.clearSession();
@@ -279,12 +401,139 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return api.searchUsers(query.trim());
   }
 
+  // ─────────────────────────── Appareils & Portefeuille ────────────────
+
+  Future<Map<String, dynamic>?> fetchUserProfile() async {
+    if (!isAuthenticated) return null;
+    return api.getMe();
+  }
+
+  Future<Map<String, dynamic>?> fetchDevices() async {
+    if (!isAuthenticated) return null;
+    return api.fetchDevices();
+  }
+
+  Future<Map<String, dynamic>> registerDevice({
+    required String label,
+    required String deviceId,
+    required String platform,
+  }) async {
+    return api.registerDevice(label: label, deviceId: deviceId, platform: platform);
+  }
+
+  Future<Map<String, dynamic>> deleteDevice(String deviceId) async {
+    return api.deleteDevice(deviceId);
+  }
+
+  Future<Map<String, dynamic>?> fetchWallet() async {
+    if (!isAuthenticated) return null;
+    await _ensureDemoSession();
+    return api.getWallet();
+  }
+
+  Future<Map<String, dynamic>> rechargeWallet({
+    required int montant,
+    String? phoneNumber,
+    String? idempotencyKey,
+  }) async {
+    await _ensureDemoSession();
+    return api.rechargeWallet(
+      montant: montant,
+      phoneNumber: phoneNumber,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<Map<String, dynamic>> transferWallet({
+    required int montant,
+    required String recipient,
+    String? idempotencyKey,
+  }) async {
+    await _ensureDemoSession();
+    return api.transferWallet(
+      montant: montant,
+      recipient: recipient,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  Future<Map<String, dynamic>> withdrawWallet({
+    required int montant,
+    String? phoneNumber,
+    String? idempotencyKey,
+  }) async {
+    await _ensureDemoSession();
+    return api.withdrawWallet(
+      montant: montant,
+      phoneNumber: phoneNumber,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  /// Solde KondjiPay — garantit la session démo avant l'appel.
+  Future<int> kproSolde() async {
+    await _ensureDemoSession();
+    return kpro.solde();
+  }
+
+  /// Demande d'encaissement — garantit la session démo avant l'appel.
+  Future<Map<String, dynamic>> kproEncaisser({
+    required int patientId,
+    required int montant,
+    String motif = '',
+  }) async {
+    await _ensureDemoSession();
+    return kpro.encaisser(patientId: patientId, montant: montant, motif: motif);
+  }
+
   // ─────────────────────────── Contacts ────────────────────────────────
 
-  Future<void> addContact(String name, String targetUserId, {String? phoneNumber}) async {
+  /// Charge les contacts depuis le serveur (`GET /api/v1/contacts`) et les
+  /// fusionne avec la liste locale (dédoublonnage par `userId`, le serveur
+  /// fait foi). Silencieux en cas d'échec réseau : la liste locale reste
+  /// utilisable hors-ligne.
+  Future<void> fetchContacts() async {
+    if (!isAuthenticated) return;
+    try {
+      final res = await api.fetchContacts();
+      final list = res['contacts'];
+      if (list is! List) return;
+      final byUserId = <String, Contact>{
+        for (final c in contacts)
+          if (c.userId.isNotEmpty) c.userId: c,
+      };
+      for (final e in list.whereType<Map>()) {
+        final m = e.cast<String, dynamic>();
+        final uid = '${m['user_id'] ?? ''}';
+        if (uid.isEmpty) continue;
+        byUserId[uid] = Contact(
+          id: 'srv-$uid',
+          name: m['name']?.toString() ?? 'Inconnu',
+          userId: uid,
+          phoneNumber: m['phone_number']?.toString(),
+        );
+      }
+      contacts = byUserId.values.toList();
+      await storage.saveContacts(contacts);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[YAM][CONTACTS] chargement serveur impossible : $e');
+    }
+  }
+
+  /// Ajoute un contact : d'abord côté serveur (`POST /api/v1/contacts`), puis
+  /// localement. Lève une exception si le serveur refuse (contact inexistant,
+  /// réseau…) — l'écran affiche alors l'erreur.
+  Future<void> addContact(String name, String targetUserId,
+      {String? phoneNumber}) async {
     final n = name.trim();
     final id = targetUserId.trim();
     if (n.isEmpty || id.isEmpty) return;
+    final userIdInt = int.tryParse(id);
+    if (userIdInt == null) {
+      throw Exception('Identifiant de contact invalide.');
+    }
+    await api.addContact(userIdInt);
     contacts.add(Contact(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       name: n,
@@ -295,7 +544,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// Supprime un contact : d'abord côté serveur (`DELETE /api/v1/contacts/{id}`),
+  /// puis localement. Les contacts historiques sans identifiant numérique ne
+  /// sont supprimés que localement (le serveur n'a rien à supprimer).
   Future<void> removeContact(Contact c) async {
+    final userIdInt = int.tryParse(c.userId);
+    if (userIdInt != null) {
+      await api.removeContact(userIdInt);
+    }
     contacts.removeWhere((x) => x.id == c.id);
     await storage.saveContacts(contacts);
     notifyListeners();

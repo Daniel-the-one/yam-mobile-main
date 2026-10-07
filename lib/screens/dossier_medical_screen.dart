@@ -20,29 +20,12 @@ class _DossierMedicalScreenState extends State<DossierMedicalScreen> {
   int _tabIndex = 0; // 0 = Rechercher, 1 = Scanner carte
   final _searchController = TextEditingController();
 
-  // Données mockées
-  final List<Patient> _allPatients = const [
-    Patient(
-      nom: 'Jean KOFFI',
-      telephone: '+228 90 12 34 56',
-      dateNaissance: '12/05/1985',
-    ),
-    Patient(
-      nom: 'Amina ABALO',
-      telephone: '+228 91 23 45 67',
-      dateNaissance: '03/11/1992',
-    ),
-    Patient(
-      nom: 'Kofi AGBEKO',
-      telephone: '+228 99 87 65 43',
-      dateNaissance: '27/08/1978',
-    ),
-    Patient(
-      nom: 'Essi MENSAH',
-      telephone: '+228 93 45 67 89',
-      dateNaissance: '15/02/2001',
-    ),
-  ];
+  // Liste patients — alimentée par l'API médicale KondjiPro
+  // (GET /api/patients.php). Vide tant que le chargement n'a pas réussi ;
+  // sans AppState (widget isolé / test), la liste reste vide.
+  List<Patient> _allPatients = const [];
+  bool _loading = true;
+  String? _error;
 
   List<Patient> get _filteredPatients {
     final query = _searchController.text.trim().toLowerCase();
@@ -57,6 +40,35 @@ class _DossierMedicalScreenState extends State<DossierMedicalScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(() => setState(() {}));
+    _loadPatients();
+  }
+
+  /// Charge la liste des patients depuis l'API médicale (famille réelle).
+  ///
+  /// Échec → message d'erreur affiché sous la barre de recherche + bouton
+  /// réessayer (pas de fausses données présentées comme réelles).
+  Future<void> _loadPatients() async {
+    final app = widget.app;
+    if (app == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await app.kpro.searchPatients('');
+      if (!mounted) return;
+      setState(() {
+        _allPatients = rows.map(Patient.fromApi).toList();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -120,9 +132,43 @@ class _DossierMedicalScreenState extends State<DossierMedicalScreen> {
             ),
             const SizedBox(height: 10),
 
+            // Bandeau d'erreur API (jamais de fausses données réelles).
+            if (_error != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: YamColors.danger.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: YamColors.danger.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline_rounded,
+                        color: YamColors.danger, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(fontSize: 12.5, color: YamColors.text),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _loadPatients,
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+
             // Liste des patients
             Expanded(
-              child: _filteredPatients.isEmpty
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: YamColors.primary),
+                    )
+                  : _filteredPatients.isEmpty
                   ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -143,16 +189,20 @@ class _DossierMedicalScreenState extends State<DossierMedicalScreen> {
                         ],
                       ),
                     )
-                  : ListView.separated(
-                      itemCount: _filteredPatients.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        return _PatientCard(
-                          patient: _filteredPatients[index],
-                          app: widget.app,
-                        );
-                      },
+                  : RefreshIndicator(
+                      color: YamColors.primary,
+                      onRefresh: _loadPatients,
+                      child: ListView.separated(
+                        itemCount: _filteredPatients.length,
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          return _PatientCard(
+                            patient: _filteredPatients[index],
+                            app: widget.app,
+                          );
+                        },
+                      ),
                     ),
             ),
           ] else ...[
@@ -296,14 +346,17 @@ class _DossierMedicalScreenState extends State<DossierMedicalScreen> {
 
   /// Retrouve le patient dont l'identifiant de carte correspond au code scanné.
   ///
-  /// La comparaison ignore la casse et les espaces, pour tolérer les écarts de
-  /// saisie sur la carte.
+  /// Compare à la fois `id` (ex : `PAT-2024-00123`) et `uuid` (contenu du QR
+  /// côté KondjiPro), en ignorant casse et espaces.
   Patient? _findPatientById(String code) {
     final needle = Patient.normalizeId(code);
     if (needle.isEmpty) return null;
 
     for (final patient in _allPatients) {
-      if (Patient.normalizeId(patient.id) == needle) return patient;
+      if (Patient.normalizeId(patient.id) == needle ||
+          Patient.normalizeId(patient.uuid) == needle) {
+        return patient;
+      }
     }
     return null;
   }

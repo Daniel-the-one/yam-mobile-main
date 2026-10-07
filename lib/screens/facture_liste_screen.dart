@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 import 'facturer_screen.dart';
 
@@ -24,7 +25,10 @@ class _Facture {
 
 /// Liste des factures. Point d'entrée vers la création d'une facture.
 class FactureListeScreen extends StatelessWidget {
-  const FactureListeScreen({super.key});
+  const FactureListeScreen({super.key, this.app});
+
+  /// Contexte applicatif transmis à l'écran de création (API médicale).
+  final AppState? app;
 
   static const _factures = <_Facture>[
     _Facture(
@@ -137,7 +141,7 @@ class FactureListeScreen extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const FacturerScreen()),
+                    MaterialPageRoute(builder: (_) => FacturerScreen(app: app)),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,

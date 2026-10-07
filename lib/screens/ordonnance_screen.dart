@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
+import '../models/patient.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 
 class _MedicamentItem {
@@ -24,7 +26,15 @@ class _MedicamentItem {
 }
 
 class OrdonnanceScreen extends StatefulWidget {
-  const OrdonnanceScreen({super.key});
+  const OrdonnanceScreen({super.key, this.app, this.patient});
+
+  /// Contexte applicatif — si fourni, l'ordonnance est enregistrée via
+  /// l'API médicale KondjiPro (`POST /api/ordonnance_save.php`) ; sinon
+  /// l'écran reste en mode démonstration.
+  final AppState? app;
+
+  /// Patient présélectionné (depuis le dossier médical).
+  final Patient? patient;
 
   @override
   State<OrdonnanceScreen> createState() => _OrdonnanceScreenState();
@@ -65,12 +75,34 @@ class _OrdonnanceScreenState extends State<OrdonnanceScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    final patient = widget.patient;
+    if (patient != null && patient.telephone.isNotEmpty) {
+      _phoneController.text = patient.telephone;
+    }
+  }
+
+  @override
   void dispose() {
     _phoneController.dispose();
     for (final item in _medicaments) {
       item.dispose();
     }
     super.dispose();
+  }
+
+  bool _saving = false;
+
+  void _snack(String message, {Color color = YamColors.primary}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _addMedicament() {
@@ -88,20 +120,53 @@ class _OrdonnanceScreenState extends State<OrdonnanceScreen> {
     }
   }
 
-  void _validerOrdonnance() {
-    if (_formKey.currentState!.validate()) {
-      final phone = _phoneController.text.trim();
-      final count = _medicaments.length;
+  Future<void> _validerOrdonnance() async {
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) return;
 
+    final phone = _phoneController.text.trim();
+    final count = _medicaments.length;
+    final app = widget.app;
+
+    // ── Mode démo (aucun AppState) : comportement historique ──
+    if (app == null) {
       debugPrint('Ordonnance validée pour $phone avec $count médicament(s)');
+      _snack('Ordonnance enregistrée ($count médicament(s))');
+      return;
+    }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Ordonnance enregistrée ($count médicament(s))'),
-          backgroundColor: YamColors.primary,
-          behavior: SnackBarBehavior.floating,
-        ),
+    // ── Mode réel : POST ordonnance_save.php (med[i][…]) ──
+    setState(() => _saving = true);
+    try {
+      final patientId = await app.kpro.resolvePatientId(
+        phone: phone,
+        knownId: widget.patient?.id,
       );
+      if (patientId == null) {
+        _snack('Aucun patient trouvé pour le numéro $phone.',
+            color: YamColors.danger);
+        return;
+      }
+
+      await app.kpro.saveOrdonnance(
+        patientId: patientId,
+        notes: '',
+        meds: _medicaments
+            .map((m) => {
+                  'nom': m.nameController.text.trim(),
+                  'quantite': m.quantityController.text.trim(),
+                  'unite': m.unit,
+                  'frequence': m.frequency,
+                })
+            .toList(),
+      );
+
+      _snack('Ordonnance enregistrée ($count médicament(s))');
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      _snack('$e', color: YamColors.danger);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -685,7 +750,7 @@ class _OrdonnanceScreenState extends State<OrdonnanceScreen> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _validerOrdonnance,
+                  onPressed: _saving ? null : _validerOrdonnance,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,
                     foregroundColor: Colors.white,
@@ -698,7 +763,16 @@ class _OrdonnanceScreenState extends State<OrdonnanceScreen> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  child: const Text("Valider l'ordonnance"),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text("Valider l'ordonnance"),
                 ),
               ),
             ),

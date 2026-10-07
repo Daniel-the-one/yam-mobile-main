@@ -27,6 +27,13 @@ class StorageService {
   static const _kUserPhone = 'user_phone';
   static const _kBatteryExemptionDismissed = 'battery_exemption_dismissed';
 
+  // Session KondjiPro (famille médicale — cookie PHP + token CSRF).
+  static const _kKproSession = 'kpro_session';
+  static const _kKproCsrf = 'kpro_csrf';
+
+  // Session de démonstration (famille argent — jeton Bearer /api/demo/v1).
+  static const _kDemoToken = 'demo_token';
+
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
   /// Génère et persiste un identifiant unique au premier lancement :
@@ -80,6 +87,37 @@ class StorageService {
     await p.remove(_kAuthToken);
     await p.remove(_kUserId);
     await p.remove(_kUserPhone);
+    await p.remove(_kKproSession);
+    await p.remove(_kKproCsrf);
+    await p.remove(_kDemoToken);
+  }
+
+  // ─────────────── Session de démonstration (argent) ───────────────
+
+  Future<String> loadDemoToken() async =>
+      (await _prefs).getString(_kDemoToken) ?? '';
+
+  Future<void> saveDemoToken(String token) async =>
+      (await _prefs).setString(_kDemoToken, token);
+
+  // ─────────────── Session médicale KondjiPro (cookie + CSRF) ───────────────
+
+  Future<String> loadKproSession() async =>
+      (await _prefs).getString(_kKproSession) ?? '';
+
+  Future<void> saveKproSession(String cookie) async =>
+      (await _prefs).setString(_kKproSession, cookie);
+
+  Future<String> loadKproCsrf() async =>
+      (await _prefs).getString(_kKproCsrf) ?? '';
+
+  Future<void> saveKproCsrf(String token) async =>
+      (await _prefs).setString(_kKproCsrf, token);
+
+  Future<void> clearKproSession() async {
+    final p = await _prefs;
+    await p.remove(_kKproSession);
+    await p.remove(_kKproCsrf);
   }
 
   /// Vrai si l'utilisateur a déjà refusé (ou fermé) la demande d'exemption

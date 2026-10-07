@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
+import '../models/patient.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 
 class _Acte {
@@ -17,7 +19,16 @@ class _Acte {
 }
 
 class FacturerScreen extends StatefulWidget {
-  const FacturerScreen({super.key});
+  const FacturerScreen({super.key, this.app, this.patient});
+
+  /// Contexte applicatif — si fourni, la facture est enregistrée via
+  /// l'API médicale KondjiPro (`POST /api/facture_save.php`) ; sinon
+  /// l'écran reste en mode démonstration (aucun appareil connecté).
+  final AppState? app;
+
+  /// Patient présélectionné (depuis le dossier médical) — si connu, le
+  /// champ téléphone est pré-rempli et la résolution patient est immédiate.
+  final Patient? patient;
 
   @override
   State<FacturerScreen> createState() => _FacturerScreenState();
@@ -39,6 +50,17 @@ class _FacturerScreenState extends State<FacturerScreen> {
   int get _total =>
       _actes.where((a) => a.checked).fold(0, (sum, a) => sum + a.prix);
 
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final patient = widget.patient;
+    if (patient != null && patient.telephone.isNotEmpty) {
+      _phoneController.text = patient.telephone;
+    }
+  }
+
   String _formatPrix(int value) {
     final str = value.toString();
     final buffer = StringBuffer();
@@ -49,32 +71,67 @@ class _FacturerScreenState extends State<FacturerScreen> {
     return '${buffer.toString()} FCFA';
   }
 
-  void _validerFacture() {
-    if (_formKey.currentState!.validate()) {
-      final selectedActes = _actes.where((a) => a.checked).toList();
-      if (selectedActes.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Veuillez sélectionner au moins un acte.'),
-            backgroundColor: YamColors.danger,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+  void _snack(String message, {Color color = YamColors.primary}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _validerFacture() async {
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final selectedActes = _actes.where((a) => a.checked).toList();
+    if (selectedActes.isEmpty) {
+      _snack('Veuillez sélectionner au moins un acte.',
+          color: YamColors.danger);
+      return;
+    }
+
+    final phone = _phoneController.text.trim();
+    final app = widget.app;
+
+    // ── Mode démo (aucun AppState) : comportement historique ──
+    if (app == null) {
+      debugPrint('Facture validée pour $phone — Total: $_total FCFA');
+      _snack(
+        'Facture enregistrée (${selectedActes.length} acte(s) — ${_formatPrix(_total)})',
+      );
+      return;
+    }
+
+    // ── Mode réel : résolution du patient puis POST facture_save.php ──
+    setState(() => _saving = true);
+    try {
+      final patientId = await app.kpro.resolvePatientId(
+        phone: phone,
+        knownId: widget.patient?.id,
+      );
+
+      if (patientId == null) {
+        _snack('Aucun patient trouvé pour le numéro $phone.',
+            color: YamColors.danger);
         return;
       }
 
-      final phone = _phoneController.text.trim();
-      debugPrint('Facture validée pour $phone — Total: $_total FCFA');
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Facture enregistrée (${selectedActes.length} acte(s) — ${_formatPrix(_total)})',
-          ),
-          backgroundColor: YamColors.primary,
-          behavior: SnackBarBehavior.floating,
-        ),
+      await app.kpro.saveFacture(
+        patientId: patientId,
+        codes: selectedActes.map((a) => a.code).toList(),
       );
+
+      _snack(
+        'Facture enregistrée (${selectedActes.length} acte(s) — ${_formatPrix(_total)})',
+      );
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      _snack('$e', color: YamColors.danger);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -396,7 +453,7 @@ class _FacturerScreenState extends State<FacturerScreen> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _validerFacture,
+                  onPressed: _saving ? null : _validerFacture,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,
                     foregroundColor: Colors.white,
@@ -409,7 +466,16 @@ class _FacturerScreenState extends State<FacturerScreen> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  child: const Text('Valider la facture'),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Valider la facture'),
                 ),
               ),
             ),

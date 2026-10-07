@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 import 'ordonnance_screen.dart';
 
@@ -20,7 +21,10 @@ class _Ordonnance {
 
 /// Liste des ordonnances. Point d'entrée vers la création d'une ordonnance.
 class OrdonnanceListeScreen extends StatelessWidget {
-  const OrdonnanceListeScreen({super.key});
+  const OrdonnanceListeScreen({super.key, this.app});
+
+  /// Contexte applicatif transmis à l'écran de création (API médicale).
+  final AppState? app;
 
   static const _ordonnances = <_Ordonnance>[
     _Ordonnance(
@@ -116,7 +120,7 @@ class OrdonnanceListeScreen extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const OrdonnanceScreen()),
+                    MaterialPageRoute(builder: (_) => OrdonnanceScreen(app: app)),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: YamColors.primary,

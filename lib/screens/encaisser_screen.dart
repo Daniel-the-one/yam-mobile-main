@@ -1,12 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
+import '../models/patient.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 
 class EncaisserScreen extends StatefulWidget {
-  const EncaisserScreen({super.key, this.showAppBar = true});
+  const EncaisserScreen({
+    super.key,
+    this.showAppBar = true,
+    this.app,
+    this.patient,
+  });
 
   final bool showAppBar;
+
+  /// Contexte applicatif — si fourni, la demande d'encaissement part vers la
+  /// route argent ([ApiConfig.encaissement]) : démo tant que
+  /// `ApiConfig.moneyDemo` est vrai (aucun argent réel ne circule).
+  final AppState? app;
+
+  /// Patient présélectionné (depuis le dossier médical).
+  final Patient? patient;
 
   @override
   State<EncaisserScreen> createState() => _EncaisserScreenState();
@@ -19,6 +34,15 @@ class _EncaisserScreenState extends State<EncaisserScreen> {
   final _reasonController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    final patient = widget.patient;
+    if (patient != null && patient.telephone.isNotEmpty) {
+      _phoneController.text = patient.telephone;
+    }
+  }
+
+  @override
   void dispose() {
     _phoneController.dispose();
     _amountController.dispose();
@@ -26,22 +50,138 @@ class _EncaisserScreenState extends State<EncaisserScreen> {
     super.dispose();
   }
 
-  void _generateQrCode() {
-    if (_formKey.currentState!.validate()) {
-      final phone = _phoneController.text.trim();
-      final amount = _amountController.text.trim();
-      final reason = _reasonController.text.trim();
+  bool _saving = false;
 
+  void _snack(String message, {Color color = YamColors.primary}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _generateQrCode() async {
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final phone = _phoneController.text.trim();
+    final amount = int.tryParse(_amountController.text.trim()) ?? 0;
+    final reason = _reasonController.text.trim();
+    final app = widget.app;
+
+    // Bornes imposées par l'API (100 – 1 000 000 FCFA).
+    if (amount < 100 || amount > 1000000) {
+      _snack('Le montant doit être compris entre 100 et 1 000 000 FCFA.',
+          color: YamColors.danger);
+      return;
+    }
+
+    // ── Mode démo (aucun AppState) : comportement historique ──
+    if (app == null) {
       debugPrint('Génération QR : $phone, $amount FCFA, $reason');
+      _snack('Génération du lien de paiement en cours...');
+      return;
+    }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Génération du lien de paiement en cours...'),
-          backgroundColor: YamColors.primary,
-          behavior: SnackBarBehavior.floating,
+    // ── Mode réel : route argent (démo si ApiConfig.moneyDemo) ──
+    setState(() => _saving = true);
+    try {
+      final patientId = await app.kpro.resolvePatientId(
+        phone: phone,
+        knownId: widget.patient?.id,
+      );
+      if (patientId == null) {
+        _snack('Aucun patient trouvé pour le numéro $phone.',
+            color: YamColors.danger);
+        return;
+      }
+
+      final result = await app.kproEncaisser(
+        patientId: patientId,
+        montant: amount,
+        motif: reason,
+      );
+
+      if (!mounted) return;
+      // Réponse démo : {ok, message, transaction:{reference, statut,…}, qr_data}
+      final tx = result['transaction'];
+      final map = tx is Map ? tx.cast<String, dynamic>() : result;
+      final reference =
+          (map['reference'] ?? result['reference'] ?? '—').toString();
+      final statut =
+          (map['statut'] ?? result['statut'] ?? 'en_attente').toString();
+      final message = (result['message'] ?? '').toString();
+
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: YamColors.surface,
+          shape: const RoundedRectangleBorder(borderRadius: kCardRadius),
+          title: const Text(
+            'Demande d\'encaissement créée',
+            style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.w700, color: YamColors.text),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _dialogRow('Référence', reference),
+              _dialogRow('Montant', '$amount FCFA'),
+              _dialogRow('Statut', statut),
+              if (message.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: YamColors.muted, height: 1.4),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
+    } catch (e) {
+      _snack('$e', color: YamColors.danger);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Widget _dialogRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 84,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 12.5, color: YamColors.muted),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: YamColors.text),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildForm() {
@@ -212,7 +352,7 @@ class _EncaisserScreenState extends State<EncaisserScreen> {
 
             // Bouton générer
             FilledButton(
-              onPressed: _generateQrCode,
+              onPressed: _saving ? null : _generateQrCode,
               style: FilledButton.styleFrom(
                 backgroundColor: YamColors.primary,
                 foregroundColor: Colors.white,
@@ -222,13 +362,22 @@ class _EncaisserScreenState extends State<EncaisserScreen> {
                 ),
                 elevation: 0,
               ),
-              child: const Text(
-                'Générer le QR de paiement',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+              child: _saving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Générer le QR de paiement',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
             ),
             const SizedBox(height: 16),
           ],

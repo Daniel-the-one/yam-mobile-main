@@ -20,9 +20,51 @@ class _ContactsScreenState extends State<ContactsScreen> {
   bool _searching = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Synchronise la liste locale avec les contacts enregistrés côté serveur.
+    widget.app.fetchContacts();
+  }
+
+  @override
   void dispose() {
     _queryCtrl.dispose();
     super.dispose();
+  }
+
+  void _showError(Object e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$e'),
+        backgroundColor: YamColors.danger,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _addContact(Map<String, dynamic> u) async {
+    final rawId = u['id'];
+    final userId = int.tryParse(rawId?.toString() ?? '');
+    if (userId == null) return;
+    try {
+      await widget.app.addContact(
+        u['name']?.toString() ?? 'Inconnu',
+        userId.toString(),
+        phoneNumber: u['phone_number']?.toString(),
+      );
+      if (mounted) setState(() => _results = []);
+    } catch (e) {
+      _showError(e);
+    }
+  }
+
+  Future<void> _removeContact(Contact c) async {
+    try {
+      await widget.app.removeContact(c);
+    } catch (e) {
+      _showError(e);
+    }
   }
 
   Future<void> _search() async {
@@ -97,14 +139,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
             return _SearchUserTile(
               user: u,
               onAdd: hasValidId
-                  ? () {
-                      widget.app.addContact(
-                        u['name']?.toString() ?? 'Inconnu',
-                        userId.toString(),
-                        phoneNumber: u['phone_number']?.toString(),
-                      );
-                      setState(() => _results = []);
-                    }
+                  ? () => _addContact(u)
                   : null,
               onCall: hasValidId
                   ? () => widget.app.call.startOutgoing(
@@ -127,17 +162,23 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ),
           )
         else
-          ...app.contacts.map((c) => _ContactTile(app, c, key: ValueKey(c.id))),
+          ...app.contacts.map((c) => _ContactTile(
+                app,
+                c,
+                key: ValueKey(c.id),
+                onRemove: () => _removeContact(c),
+              )),
       ],
     );
   }
 }
 
 class _ContactTile extends StatelessWidget {
-  const _ContactTile(this.app, this.contact, {super.key});
+  const _ContactTile(this.app, this.contact, {super.key, required this.onRemove});
 
   final AppState app;
   final Contact contact;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -197,7 +238,7 @@ class _ContactTile extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Supprimer',
-            onPressed: () => app.removeContact(contact),
+            onPressed: onRemove,
             icon: const Icon(Icons.delete_outline_rounded, color: YamColors.muted),
           ),
         ],

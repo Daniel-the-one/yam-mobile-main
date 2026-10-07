@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../config/api_config.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import 'call_hub_screen.dart';
@@ -67,7 +68,7 @@ class _HomeShellState extends State<HomeShell> {
                         children: [
                           HomeScreen(app: app),
                           DossierMedicalScreen(app: app, showAppBar: false),
-                          const EncaisserScreen(showAppBar: false),
+                          EncaisserScreen(showAppBar: false, app: app),
                           ProfilScreen(app: app),
                         ],
                       ),
@@ -456,13 +457,174 @@ class _FlatTab extends StatelessWidget {
 }
 
 // ─── Écran Profil ──────────────────────────────────────────────────────────────
-class ProfilScreen extends StatelessWidget {
+class ProfilScreen extends StatefulWidget {
   const ProfilScreen({super.key, required this.app});
 
   final AppState app;
 
   @override
+  State<ProfilScreen> createState() => _ProfilScreenState();
+}
+
+class _ProfilScreenState extends State<ProfilScreen> {
+  /// Profil médecin renvoyé par `GET /api/medecin.php` (famille réelle).
+  Map<String, dynamic>? _medecin;
+
+  /// Solde KondjiPay — route argent centralisée dans [ApiConfig] (démo tant
+  /// que `moneyDemo` est vrai).
+  int? _solde;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    Map<String, dynamic>? medecin;
+    int? solde;
+    String? error;
+
+    // 1. Profil médecin (API médicale — réelle) + solde embarqué.
+    try {
+      final res = await widget.app.kpro.medecinProfil();
+      final m = res['medecin'];
+      if (m is Map) medecin = m.cast<String, dynamic>();
+      final embedded = res['solde'];
+      if (embedded != null) solde = int.tryParse('$embedded');
+    } catch (e) {
+      error = '$e';
+    }
+
+    // 2. Solde via la route argent centralisée (point de bascule démo/réel).
+    try {
+      solde = await widget.app.kproSolde();
+    } catch (e) {
+      error ??= '$e';
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _medecin = medecin;
+      _solde = solde;
+      _error = error;
+      _loading = false;
+    });
+  }
+
+  String get _specialite {
+    final s = (_medecin?['specialite'] ?? '').toString();
+    return s.isNotEmpty ? s : '';
+  }
+
+  String get _medecinNom {
+    final prenom = (_medecin?['prenom'] ?? '').toString();
+    final nom = (_medecin?['nom'] ?? '').toString();
+    final full = '$prenom $nom'.trim();
+    return full.isNotEmpty ? full : '';
+  }
+
+  Widget _buildSoldeCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: YamColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: YamColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: YamColors.accentSoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.account_balance_wallet_outlined,
+              color: YamColors.accent,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Solde KondjiPay',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: YamColors.muted,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (ApiConfig.moneyDemo)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: YamColors.accentSoft,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'DÉMO',
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            color: YamColors.accent,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                if (_loading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: YamColors.primary),
+                  )
+                else
+                  Text(
+                    _solde != null ? '${_solde!} FCFA' : '— indisponible',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: YamColors.text,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Recharger',
+            icon: const Icon(Icons.refresh_rounded,
+                size: 20, color: YamColors.muted),
+            onPressed: _loading ? null : _load,
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final app = widget.app;
     final initial = app.userName.isNotEmpty ? app.userName[0].toUpperCase() : 'U';
 
     return Scaffold(
@@ -544,6 +706,35 @@ class ProfilScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
+          // ── Carte Solde KondjiPay (route argent — démo/réel) ──
+          _buildSoldeCard(),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: YamColors.danger.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border:
+                    Border.all(color: YamColors.danger.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded,
+                      color: YamColors.danger, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(fontSize: 12, color: YamColors.text),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+
           // ── Card Informations détaillées ──
           Container(
             decoration: BoxDecoration(
@@ -558,6 +749,17 @@ class ProfilScreen extends StatelessWidget {
                   label: 'Nom & Prénom',
                   value: app.userName.isNotEmpty ? app.userName : 'Non renseigné',
                 ),
+                if (_medecinNom.isNotEmpty || _specialite.isNotEmpty) ...[
+                  const Divider(height: 1, indent: 52, color: YamColors.border),
+                  _buildInfoTile(
+                    icon: Icons.medical_services_outlined,
+                    label: 'Profil médical',
+                    value: [
+                      if (_medecinNom.isNotEmpty) _medecinNom,
+                      if (_specialite.isNotEmpty) _specialite,
+                    ].join(' — '),
+                  ),
+                ],
                 const Divider(height: 1, indent: 52, color: YamColors.border),
                 _buildInfoTile(
                   icon: Icons.phone_android_rounded,
@@ -668,7 +870,7 @@ class ProfilScreen extends StatelessWidget {
             style: FilledButton.styleFrom(backgroundColor: YamColors.danger),
             onPressed: () {
               Navigator.pop(ctx);
-              app.logout();
+              widget.app.logout();
             },
             child: const Text('Déconnexion'),
           ),
