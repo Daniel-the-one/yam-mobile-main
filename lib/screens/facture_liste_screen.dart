@@ -79,11 +79,17 @@ class _FactureListeScreenState extends State<FactureListeScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '$e';
+          _error = _friendlyError(e);
           _loading = false;
         });
       }
     }
+  }
+
+  /// Retire le préfixe technique `Exception: ` des messages d'erreur.
+  static String _friendlyError(Object e) {
+    final s = e.toString();
+    return s.startsWith('Exception: ') ? s.substring(11) : s;
   }
 
   Future<void> _openCreate() async {
