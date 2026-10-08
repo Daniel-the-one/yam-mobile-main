@@ -31,6 +31,12 @@ class StorageService {
   static const _kKproSession = 'kpro_session';
   static const _kKproCsrf = 'kpro_csrf';
 
+  // Identifiants médicaux KondjiPro (persistés pour le re-login silencieux
+  // après redémarrage de l'app — même niveau de sécurité que le token Yam,
+  // déjà stocké en clair dans SharedPreferences).
+  static const _kKproIdentifier = 'kpro_identifier';
+  static const _kKproPassword = 'kpro_password';
+
   // Session de démonstration (famille argent — jeton Bearer /api/demo/v1).
   static const _kDemoToken = 'demo_token';
 
@@ -44,8 +50,10 @@ class StorageService {
     if (existing != null && existing.isNotEmpty) return existing;
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     final rnd = Random.secure();
-    final suffix =
-        List.generate(8, (_) => chars[rnd.nextInt(chars.length)]).join();
+    final suffix = List.generate(
+      8,
+      (_) => chars[rnd.nextInt(chars.length)],
+    ).join();
     final id = 'device-$suffix';
     await p.setString(_kDeviceId, id);
     return id;
@@ -60,8 +68,7 @@ class StorageService {
   Future<String> loadAuthToken() async =>
       (await _prefs).getString(_kAuthToken) ?? '';
 
-  Future<String> loadUserId() async =>
-      (await _prefs).getString(_kUserId) ?? '';
+  Future<String> loadUserId() async => (await _prefs).getString(_kUserId) ?? '';
 
   Future<String> loadUserPhone() async =>
       (await _prefs).getString(_kUserPhone) ?? '';
@@ -89,6 +96,8 @@ class StorageService {
     await p.remove(_kUserPhone);
     await p.remove(_kKproSession);
     await p.remove(_kKproCsrf);
+    await p.remove(_kKproIdentifier);
+    await p.remove(_kKproPassword);
     await p.remove(_kDemoToken);
   }
 
@@ -118,6 +127,27 @@ class StorageService {
     final p = await _prefs;
     await p.remove(_kKproSession);
     await p.remove(_kKproCsrf);
+    await p.remove(_kKproIdentifier);
+    await p.remove(_kKproPassword);
+  }
+
+  /// Identifiants médicaux persistés pour le re-login silencieux.
+  /// Renvoie un record `(identifier, password)` ou `null` si absents.
+  Future<({String identifier, String password})?> loadKproCredentials() async {
+    final p = await _prefs;
+    final id = p.getString(_kKproIdentifier) ?? '';
+    final pwd = p.getString(_kKproPassword) ?? '';
+    if (id.isEmpty || pwd.isEmpty) return null;
+    return (identifier: id, password: pwd);
+  }
+
+  Future<void> saveKproCredentials({
+    required String identifier,
+    required String password,
+  }) async {
+    final p = await _prefs;
+    await p.setString(_kKproIdentifier, identifier);
+    await p.setString(_kKproPassword, password);
   }
 
   /// Vrai si l'utilisateur a déjà refusé (ou fermé) la demande d'exemption
@@ -162,7 +192,9 @@ class StorageService {
   Future<void> saveContacts(List<Contact> items) async {
     final p = await _prefs;
     await p.setString(
-        _kContacts, jsonEncode(items.map((c) => c.toJson()).toList()));
+      _kContacts,
+      jsonEncode(items.map((c) => c.toJson()).toList()),
+    );
   }
 
   Future<List<CallRecord>> loadCalls() async {
@@ -178,6 +210,9 @@ class StorageService {
 
   Future<void> saveCalls(List<CallRecord> items) async {
     final p = await _prefs;
-    await p.setString(_kCalls, jsonEncode(items.map((c) => c.toJson()).toList()));
+    await p.setString(
+      _kCalls,
+      jsonEncode(items.map((c) => c.toJson()).toList()),
+    );
   }
 }

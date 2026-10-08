@@ -81,6 +81,11 @@ class ApiConfig {
   /// POST → recharge de portefeuille ({montant, phone_number}) (Réel).
   static const String walletRechargeReal = '$_apiV1Prefix/wallet/recharge';
 
+  /// POST → confirme une recharge virtuelle ({transaction_id, code}) (Démo).
+  /// Simule le webhook Mobile Money : c'est lui qui crédite le solde.
+  static const String walletRechargeNotifyDemo =
+      '$_demoPrefix/wallet/recharge/notify';
+
   /// POST → transfert d'argent ({montant, recipient}) (Démo).
   /// NOTE : la route s'écrit `/wallet/transfert` côté API (français).
   static const String walletTransferDemo = '$_demoPrefix/wallet/transfert';
@@ -100,6 +105,11 @@ class ApiConfig {
   /// Endpoint de recharge wallet effectivement utilisé.
   static String get walletRecharge =>
       moneyDemo ? walletRechargeDemo : walletRechargeReal;
+
+  /// Endpoint de confirmation de recharge (démo uniquement — le flux réel
+  /// est confirmé par un webhook externe). Chaîne vide hors démo.
+  static String get walletRechargeNotify =>
+      moneyDemo ? walletRechargeNotifyDemo : '';
 
   /// Endpoint de transfert wallet effectivement utilisé.
   static String get walletTransfer =>
@@ -156,8 +166,7 @@ class ApiConfig {
   // ─────────────────────────────────────────────────────────────────────
 
   /// Démo Laravel : réponse statique, aucun paiement réel.
-  static const String encaissementDemo =
-      '$_demoPrefix/kondjipro/encaissement';
+  static const String encaissementDemo = '$_demoPrefix/kondjipro/encaissement';
 
   /// Réel : demande d'encaissement en attente (transactions_encaissement).
   static const String encaissementReal = '$_kproPrefix/encaissement_create.php';

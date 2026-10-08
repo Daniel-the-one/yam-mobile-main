@@ -40,18 +40,20 @@ void main() {
   });
 
   group('KondjiproClient — session (cookie + CSRF)', () {
-    test('login capture le cookie Set-Cookie et persiste cookie + csrf',
-        () async {
-      final storage = StorageService();
-      final client = _clientWith((_) async => _loginOk(), storage: storage);
+    test(
+      'login capture le cookie Set-Cookie et persiste cookie + csrf',
+      () async {
+        final storage = StorageService();
+        final client = _clientWith((_) async => _loginOk(), storage: storage);
 
-      expect(client.hasSession, isFalse);
-      await client.login(identifier: '+228900000002', password: 'x');
+        expect(client.hasSession, isFalse);
+        await client.login(identifier: '+228900000002', password: 'x');
 
-      expect(client.hasSession, isTrue);
-      expect(await storage.loadKproSession(), 'abc123session');
-      expect(await storage.loadKproCsrf(), 'csrf-token-abc');
-    });
+        expect(client.hasSession, isTrue);
+        expect(await storage.loadKproSession(), 'abc123session');
+        expect(await storage.loadKproCsrf(), 'csrf-token-abc');
+      },
+    );
 
     test('login sans cookie dans la réponse → exception', () async {
       final client = _clientWith(
@@ -95,7 +97,10 @@ void main() {
       await client.postForm('/api/facture_save.php', {'patient': '1'});
 
       final get = captured.firstWhere((r) => r.method == 'GET');
-      expect(get.headers['Cookie'], contains('kondjipro_session=abc123session'));
+      expect(
+        get.headers['Cookie'],
+        contains('kondjipro_session=abc123session'),
+      );
 
       final post = captured.firstWhere(
         (r) => r.method == 'POST' && !r.url.path.contains('login'),
@@ -105,9 +110,7 @@ void main() {
     });
 
     test('requête sans session → KondjiproAuthException', () async {
-      final client = _clientWith(
-        (_) async => http.Response('{}', 200),
-      );
+      final client = _clientWith((_) async => http.Response('{}', 200));
       expect(
         () => client.get('/api/patients.php'),
         throwsA(isA<KondjiproAuthException>()),
@@ -131,7 +134,7 @@ void main() {
         return http.Response(
           jsonEncode({
             'results': [
-              {'id': 1, 'nom': 'Patient Test'}
+              {'id': 1, 'nom': 'Patient Test'},
             ],
           }),
           200,
@@ -145,14 +148,14 @@ void main() {
       expect((res['results'] as List).length, 1);
     });
 
-    test('401 sans identifiants en mémoire → KondjiproAuthException',
-        () async {
+    test('401 sans identifiants en mémoire → KondjiproAuthException', () async {
       final storage = StorageService();
       // Session restaurée (cookie présent) mais jamais loguée dans ce cycle :
       // aucun identifiant en mémoire → pas de re-login possible.
       await storage.saveKproSession('stale-cookie');
       final client = _clientWith(
-        (_) async => http.Response(jsonEncode({'error': 'unauthenticated'}), 401),
+        (_) async =>
+            http.Response(jsonEncode({'error': 'unauthenticated'}), 401),
         storage: storage,
       );
       await client.restore();
@@ -162,31 +165,111 @@ void main() {
         throwsA(isA<KondjiproAuthException>()),
       );
     });
+
+    test(
+      'login persiste les identifiants pour le re-login après redémarrage',
+      () async {
+        final storage = StorageService();
+        final client = _clientWith((_) async => _loginOk(), storage: storage);
+
+        await client.login(identifier: '+228900000002', password: 'secret');
+
+        final creds = await storage.loadKproCredentials();
+        expect(creds, isNotNull);
+        expect(creds!.identifier, '+228900000002');
+        expect(creds.password, 'secret');
+      },
+    );
+
+    test(
+      'redémarrage : restore() + cookie expiré → re-login silencieux',
+      () async {
+        // Session d'une exécution précédente : cookie (désormais expiré côté
+        // serveur) + identifiants persistés.
+        final storage = StorageService();
+        await storage.saveKproSession('expired-cookie');
+        await storage.saveKproCsrf('old-csrf');
+        await storage.saveKproCredentials(
+          identifier: '+228900000002',
+          password: 'secret',
+        );
+
+        // Nouveau client = app relancée. restore() recharge cookie + identifiants.
+        var calls = 0;
+        var loginCount = 0;
+        final client = _clientWith((req) async {
+          if (req.url.path.contains('login')) {
+            loginCount++;
+            return _loginOk(cookie: 'fresh-$loginCount');
+          }
+          calls++;
+          if (calls == 1) {
+            return http.Response(jsonEncode({'error': 'unauthenticated'}), 401);
+          }
+          return http.Response(
+            jsonEncode({
+              'results': [
+                {'id': 1, 'nom': 'Patient Test'},
+              ],
+            }),
+            200,
+          );
+        }, storage: storage);
+        await client.restore();
+
+        final res = await client.get('/api/patients.php');
+
+        expect(loginCount, 1, reason: 're-login silencieux après redémarrage');
+        expect((res['results'] as List).length, 1);
+      },
+    );
+
+    test('logout purge aussi les identifiants persistés', () async {
+      final storage = StorageService();
+      final client = _clientWith((req) async {
+        if (req.url.path.contains('login')) return _loginOk();
+        return http.Response(jsonEncode({'ok': true}), 200);
+      }, storage: storage);
+      await client.login(identifier: 'id', password: 'pwd');
+
+      await client.logout();
+
+      expect(await storage.loadKproCredentials(), isNull);
+      expect(await storage.loadKproSession(), isEmpty);
+      expect(client.hasSession, isFalse);
+    });
   });
 
   group('KondjiproClient — validation métier des réponses', () {
-    test('HTTP 200 avec ok:false → exception portant le message serveur',
-        () async {
-      final client = _clientWith((req) async {
-        if (req.url.path.contains('login')) return _loginOk();
-        return http.Response(
-          jsonEncode({'ok': false, 'message': 'Patient ou actes manquants.'}),
-          200,
-        );
-      });
-      await client.login(identifier: 'i', password: 'p');
+    test(
+      'HTTP 200 avec ok:false → exception portant le message serveur',
+      () async {
+        final client = _clientWith((req) async {
+          if (req.url.path.contains('login')) return _loginOk();
+          return http.Response(
+            jsonEncode({'ok': false, 'message': 'Patient ou actes manquants.'}),
+            200,
+          );
+        });
+        await client.login(identifier: 'i', password: 'p');
 
-      expect(
-        () => client.saveFacture(patientId: 1, codes: ['C001']),
-        throwsA(predicate((e) => '$e'.contains('Patient ou actes manquants'))),
-      );
-    });
+        expect(
+          () => client.saveFacture(patientId: 1, codes: ['C001']),
+          throwsA(
+            predicate((e) => '$e'.contains('Patient ou actes manquants')),
+          ),
+        );
+      },
+    );
 
     test('HTTP 403 CSRF → exception avec message serveur', () async {
       final client = _clientWith((req) async {
         if (req.url.path.contains('login')) return _loginOk();
         return http.Response(
-          jsonEncode({'error': 'csrf_invalid', 'message': 'Token CSRF invalide ou manquant.'}),
+          jsonEncode({
+            'error': 'csrf_invalid',
+            'message': 'Token CSRF invalide ou manquant.',
+          }),
           403,
         );
       });
@@ -232,7 +315,12 @@ void main() {
         patientId: 7,
         notes: 'suivi',
         meds: [
-          {'nom': 'Paracétamol', 'quantite': '10', 'unite': 'Comprimés', 'frequence': '2 fois/jour'},
+          {
+            'nom': 'Paracétamol',
+            'quantite': '10',
+            'unite': 'Comprimés',
+            'frequence': '2 fois/jour',
+          },
         ],
       );
 
@@ -255,25 +343,27 @@ void main() {
       expect(id, 42);
     });
 
-    test('recherche par téléphone → appariement des 8 derniers chiffres',
-        () async {
-      final client = _clientWith((req) async {
-        if (req.url.path.contains('login')) return _loginOk();
-        return http.Response(
-          jsonEncode({
-            'results': [
-              {'id': 9, 'telephone': '+22890112233'},
-              {'id': 12, 'telephone': '+22890000044'},
-            ],
-          }),
-          200,
-        );
-      });
-      await client.login(identifier: 'i', password: 'p');
+    test(
+      'recherche par téléphone → appariement des 8 derniers chiffres',
+      () async {
+        final client = _clientWith((req) async {
+          if (req.url.path.contains('login')) return _loginOk();
+          return http.Response(
+            jsonEncode({
+              'results': [
+                {'id': 9, 'telephone': '+22890112233'},
+                {'id': 12, 'telephone': '+22890000044'},
+              ],
+            }),
+            200,
+          );
+        });
+        await client.login(identifier: 'i', password: 'p');
 
-      final id = await client.resolvePatientId(phone: '+228 90 00 00 44');
-      expect(id, 12);
-    });
+        final id = await client.resolvePatientId(phone: '+228 90 00 00 44');
+        expect(id, 12);
+      },
+    );
 
     test('aucun résultat → null', () async {
       final client = _clientWith((req) async {
@@ -286,31 +376,32 @@ void main() {
       expect(id, isNull);
     });
 
-    test('correspondance non exacte → null (jamais de mauvais patient)',
-        () async {
-      // Le serveur renvoie des patients dont le téléphone contient les
-      // chiffres recherchés SANS les terminer exactement : on refuse.
-      final client = _clientWith((req) async {
-        if (req.url.path.contains('login')) return _loginOk();
-        return http.Response(
-          jsonEncode({
-            'results': [
-              {'id': 9, 'telephone': '+22890112233'}, // contient 0112233…
-            ],
-          }),
-          200,
-        );
-      });
-      await client.login(identifier: 'i', password: 'p');
+    test(
+      'correspondance non exacte → null (jamais de mauvais patient)',
+      () async {
+        // Le serveur renvoie des patients dont le téléphone contient les
+        // chiffres recherchés SANS les terminer exactement : on refuse.
+        final client = _clientWith((req) async {
+          if (req.url.path.contains('login')) return _loginOk();
+          return http.Response(
+            jsonEncode({
+              'results': [
+                {'id': 9, 'telephone': '+22890112233'}, // contient 0112233…
+              ],
+            }),
+            200,
+          );
+        });
+        await client.login(identifier: 'i', password: 'p');
 
-      final id = await client.resolvePatientId(phone: '+22890999999');
-      expect(id, isNull);
-    });
+        final id = await client.resolvePatientId(phone: '+22890999999');
+        expect(id, isNull);
+      },
+    );
   });
 
   group('KondjiproClient — erreurs réseau', () {
-    test('exception réseau → message orienté action (pas de jargon)',
-        () async {
+    test('exception réseau → message orienté action (pas de jargon)', () async {
       final client = _clientWith((req) async {
         if (req.url.path.contains('login')) return _loginOk();
         throw http.ClientException('Connection refused');
@@ -319,9 +410,7 @@ void main() {
 
       expect(
         () => client.get('/api/patients.php'),
-        throwsA(predicate(
-          (e) => '$e'.contains('vérifiez votre connexion'),
-        )),
+        throwsA(predicate((e) => '$e'.contains('vérifiez votre connexion'))),
       );
     });
   });
@@ -333,7 +422,10 @@ void main() {
         storage: StorageService(),
         demoTokenProvider: () => 'demo-token-123',
         httpClient: MockClient((req) async {
-          expect(req.url.toString(), 'http://kpro.test/api/demo/v1/kondjipro/solde');
+          expect(
+            req.url.toString(),
+            'http://kpro.test/api/demo/v1/kondjipro/solde',
+          );
           expect(req.headers['Authorization'], 'Bearer demo-token-123');
           expect(req.headers.containsKey('Cookie'), isFalse);
           return http.Response(
@@ -354,8 +446,10 @@ void main() {
         storage: StorageService(),
         demoTokenProvider: () => 'demo-token-123',
         httpClient: MockClient((req) async {
-          expect(req.url.toString(),
-              'http://kpro.test/api/demo/v1/kondjipro/encaissement');
+          expect(
+            req.url.toString(),
+            'http://kpro.test/api/demo/v1/kondjipro/encaissement',
+          );
           expect(req.headers['Authorization'], 'Bearer demo-token-123');
           bodySent = Uri.splitQueryString(req.body);
           return http.Response(
@@ -383,10 +477,7 @@ void main() {
         httpClient: MockClient((_) async => http.Response('{}', 200)),
       );
 
-      expect(
-        () => client.solde(),
-        throwsA(isA<KondjiproAuthException>()),
-      );
+      expect(() => client.solde(), throwsA(isA<KondjiproAuthException>()));
     });
   });
 
@@ -399,7 +490,14 @@ void main() {
           jsonEncode({
             'ok': true,
             'factures': [
-              {'id': 1, 'numero': 'FAC-2026-001', 'patient': 'Jean KOFFI', 'montant': 5000, 'date': '16/09/2026', 'statut': 'payee'},
+              {
+                'id': 1,
+                'numero': 'FAC-2026-001',
+                'patient': 'Jean KOFFI',
+                'montant': 5000,
+                'date': '16/09/2026',
+                'statut': 'payee',
+              },
             ],
           }),
           200,
@@ -421,7 +519,16 @@ void main() {
           jsonEncode({
             'ok': true,
             'ordonnances': [
-              {'id': 1, 'numero': 'ORD-2026-001', 'patient': 'Jean KOFFI', 'date': '16/09/2026', 'notes': '', 'medicaments': [{'nom': 'Paracétamol 500mg', 'quantite': 21}]},
+              {
+                'id': 1,
+                'numero': 'ORD-2026-001',
+                'patient': 'Jean KOFFI',
+                'date': '16/09/2026',
+                'notes': '',
+                'medicaments': [
+                  {'nom': 'Paracétamol 500mg', 'quantite': 21},
+                ],
+              },
             ],
           }),
           200,
@@ -432,7 +539,10 @@ void main() {
       final rows = await client.ordonnances();
       expect(rows, hasLength(1));
       expect(rows.first['numero'], 'ORD-2026-001');
-      expect((rows.first['medicaments'] as List).first['nom'], 'Paracétamol 500mg');
+      expect(
+        (rows.first['medicaments'] as List).first['nom'],
+        'Paracétamol 500mg',
+      );
     });
 
     test('factures() renvoie une liste vide si la clé est absente', () async {

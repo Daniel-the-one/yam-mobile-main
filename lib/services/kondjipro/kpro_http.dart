@@ -49,18 +49,27 @@ class KproHttpClient {
   String? _sessionCookie;
   String? _csrfToken;
 
-  // Identifiants conservés EN MÉMOIRE UNIQUEMENT (jamais persistés) pour
-  // permettre un re-login silencieux pendant la durée de vie de l'app.
+  // Identifiants conservés en mémoire pour le re-login silencieux, restaurés
+  // depuis le stockage local au démarrage ([restore]) pour survivre au
+  // redémarrage de l'app (sinon la session médicale expirée ne pourrait pas
+  // être rouverte automatiquement).
   String? _identifier;
   String? _password;
 
   /// Vrai si un cookie de session est disponible (potentiellement expiré).
   bool get hasSession => _sessionCookie != null && _sessionCookie!.isNotEmpty;
 
-  /// Restaure la session persistée (cookie + CSRF) au démarrage de l'app.
+  /// Restaure la session persistée (cookie + CSRF + identifiants) au
+  /// démarrage de l'app. Les identifiants permettent le re-login silencieux
+  /// si le cookie PHP a expiré côté serveur.
   Future<void> restore() async {
     _sessionCookie = await storage.loadKproSession();
     _csrfToken = await storage.loadKproCsrf();
+    final creds = await storage.loadKproCredentials();
+    if (creds != null) {
+      _identifier = creds.identifier;
+      _password = creds.password;
+    }
   }
 
   Uri _uri(String path) {
@@ -108,6 +117,12 @@ class KproHttpClient {
     if (_csrfToken != null && _csrfToken!.isNotEmpty) {
       await storage.saveKproCsrf(_csrfToken!);
     }
+    // Persiste les identifiants pour le re-login silencieux après un
+    // redémarrage de l'app (la session PHP expire côté serveur).
+    await storage.saveKproCredentials(
+      identifier: identifier,
+      password: password,
+    );
     debugPrint(
       '[YAM][KPRO] session médicale établie (csrf=${_csrfToken != null})',
     );
