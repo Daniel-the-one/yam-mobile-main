@@ -29,18 +29,20 @@ class WalletApi {
     String? phoneNumber,
     String? idempotencyKey,
   }) async {
-    final headers = _http.buildHeaders(
+    final idemHeaders = idempotencyKey != null && idempotencyKey.isNotEmpty
+        ? {'Idempotency-Key': idempotencyKey}
+        : null;
+    final res = await _http.postRaw(
+      ApiConfig.walletRecharge,
+      {
+        'montant': montant,
+        if (phoneNumber != null && phoneNumber.isNotEmpty)
+          'phone_number': phoneNumber,
+      },
       authenticated: true,
       demo: ApiConfig.moneyDemo,
+      extraHeaders: idemHeaders,
     );
-    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    final res = await _http.postRaw(ApiConfig.walletRecharge, {
-      'montant': montant,
-      if (phoneNumber != null && phoneNumber.isNotEmpty)
-        'phone_number': phoneNumber,
-    }, extraHeaders: headers);
 
     final decoded = jsonDecode(res.body);
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -62,17 +64,16 @@ class WalletApi {
     required String recipient,
     String? idempotencyKey,
   }) async {
-    final headers = _http.buildHeaders(
+    final idemHeaders = idempotencyKey != null && idempotencyKey.isNotEmpty
+        ? {'Idempotency-Key': idempotencyKey}
+        : null;
+    final res = await _http.postRaw(
+      ApiConfig.walletTransfer,
+      {'montant': montant, 'recipient': recipient},
       authenticated: true,
       demo: ApiConfig.moneyDemo,
+      extraHeaders: idemHeaders,
     );
-    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    final res = await _http.postRaw(ApiConfig.walletTransfer, {
-      'montant': montant,
-      'recipient': recipient,
-    }, extraHeaders: headers);
 
     final decoded = YamHttpClient.decodeSafe(res, ApiConfig.walletTransfer);
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -94,18 +95,20 @@ class WalletApi {
     String? phoneNumber,
     String? idempotencyKey,
   }) async {
-    final headers = _http.buildHeaders(
+    final idemHeaders = idempotencyKey != null && idempotencyKey.isNotEmpty
+        ? {'Idempotency-Key': idempotencyKey}
+        : null;
+    final res = await _http.postRaw(
+      ApiConfig.walletWithdraw,
+      {
+        'montant': montant,
+        if (phoneNumber != null && phoneNumber.isNotEmpty)
+          'phone_number': phoneNumber,
+      },
       authenticated: true,
       demo: ApiConfig.moneyDemo,
+      extraHeaders: idemHeaders,
     );
-    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    final res = await _http.postRaw(ApiConfig.walletWithdraw, {
-      'montant': montant,
-      if (phoneNumber != null && phoneNumber.isNotEmpty)
-        'phone_number': phoneNumber,
-    }, extraHeaders: headers);
 
     final decoded = YamHttpClient.decodeSafe(res, ApiConfig.walletWithdraw);
     if (res.statusCode < 200 || res.statusCode >= 300) {

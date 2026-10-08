@@ -55,6 +55,16 @@ class CallsApi {
       return;
     }
 
+    // Validation déterministe : hors de la boucle de retry — inutile de
+    // retenter une entrée invalide (un 'bye' avec un id malformé ne doit
+    // pas déclencher 3 tentatives).
+    final toUserIdInt = toUserId != null && toUserId.isNotEmpty
+        ? int.tryParse(toUserId)
+        : null;
+    if (toUserId != null && toUserId.isNotEmpty && toUserIdInt == null) {
+      throw ApiException('to_user_id doit être un entier (reçu : "$toUserId")');
+    }
+
     // Retry pour les signaux 'bye' (aligné sur le client web : 3 tentatives max)
     final isBye = type == 'bye';
     int attempt = 0;
@@ -63,16 +73,6 @@ class CallsApi {
 
     while (true) {
       try {
-        final toUserIdInt = toUserId != null && toUserId.isNotEmpty
-            ? int.tryParse(toUserId)
-            : null;
-        // Si toUserId est fourni mais non parseable en int, on lève une erreur explicite
-        // plutôt que d'envoyer une chaîne que le backend rejettera.
-        if (toUserId != null && toUserId.isNotEmpty && toUserIdInt == null) {
-          throw ApiException(
-            'to_user_id doit être un entier (reçu : "$toUserId")',
-          );
-        }
         await _http.post('/api/v1/call/signal', {
           if (toDeviceId != null && toDeviceId.isNotEmpty)
             'to_device_id': toDeviceId,
