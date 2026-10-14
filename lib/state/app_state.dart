@@ -54,6 +54,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   int get missedCount => calls.where((c) => c.missed).length;
   bool get isAuthenticated => authToken.isNotEmpty && userId.isNotEmpty;
 
+  int currentTab = 0;
+
+  void setTab(int index) {
+    if (currentTab != index) {
+      currentTab = index;
+      notifyListeners();
+    }
+  }
+
   Future<void> init() async {
     WidgetsBinding.instance.addObserver(this);
     unawaited(Permission.notification.request().catchError((_) => PermissionStatus.denied));

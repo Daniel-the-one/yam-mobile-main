@@ -36,8 +36,6 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _tab = 0;
-
   @override
   Widget build(BuildContext context) {
     final app = widget.app;
@@ -48,6 +46,7 @@ class _HomeShellState extends State<HomeShell> {
       builder: (context, _) {
         // Hauteur totale occupée par la barre dans le layout
         final navTotalHeight = _kNavBarHeight + bp;
+        final currentTab = app.currentTab;
 
         return Scaffold(
           backgroundColor: YamColors.pageBg,
@@ -64,7 +63,7 @@ class _HomeShellState extends State<HomeShell> {
                     _Header(app: app),
                     Expanded(
                       child: IndexedStack(
-                        index: _tab,
+                        index: currentTab,
                         children: [
                           HomeScreen(app: app),
                           DossierMedicalScreen(app: app, showAppBar: false),
@@ -84,8 +83,8 @@ class _HomeShellState extends State<HomeShell> {
                   right: 0,
                   bottom: 0,
                   child: _CustomBottomNav(
-                    currentIndex: _tab,
-                    onTap: (i) => setState(() => _tab = i),
+                    currentIndex: currentTab,
+                    onTap: (i) => app.setTab(i),
                   ),
                 ),
 

@@ -303,10 +303,7 @@ class _QuickAccessGrid extends StatelessWidget {
           icon: Icons.folder_shared_rounded,
           iconColor: YamColors.primary,
           iconBgColor: YamColors.primarySoft,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => DossierMedicalScreen(app: app)),
-          ),
+          onTap: () => app?.setTab(1),
         ),
         _GridCard(
           title: 'Encaisser',
@@ -314,10 +311,7 @@ class _QuickAccessGrid extends StatelessWidget {
           icon: Icons.qr_code_rounded,
           iconColor: YamColors.primary,
           iconBgColor: YamColors.primarySoft,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => EncaisserScreen(app: app)),
-          ),
+          onTap: () => app?.setTab(2),
         ),
         _GridCard(
           title: 'Facturer',
